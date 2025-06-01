@@ -3,9 +3,14 @@ use async_trait::async_trait;
 use tokio::io::{AsyncRead, AsyncWrite, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Command, ChildStdout};
 use std::process::Stdio;
+use std::sync::Arc;
 use indicatif::ProgressBar;
 use tokio::sync::mpsc;
 use bytes::Bytes;
+
+use crate::utils::counting_reader::CountingReader;
+
+
 
 #[async_trait]
 pub trait PostgresTrait {
@@ -61,7 +66,10 @@ impl PostgresTrait for PostgresClient {
             }
         });
 
-        Ok(Box::new(BufReader::new(stdout)))
+        // Wrap stdout in a counting reader, regardless of whether a progress bar is provided
+        let stdout = BufReader::new(stdout);
+        let stdout = BufReader::new(stdout);
+        Ok(Box::new(stdout))
     }
 }
 
@@ -81,7 +89,7 @@ mod tests {
         );
 
         // This test will fail if pg_dump is not installed or if the database is not accessible
-        let result = client.dump().await;
+        let result = client.dump(None).await;
         assert!(result.is_ok());
 
         if let Ok(mut reader) = result {

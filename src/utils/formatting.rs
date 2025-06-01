@@ -1,7 +1,5 @@
-pub mod counting_reader;
-
 pub fn format_bytes(bytes: u64) -> String {
-    const UNITS: [&str; 4] = ["B", "KB", "MB", "GB"];
+    const UNITS: [&str; 6] = ["B", "KB", "MB", "GB", "TB", "PB"];
     let mut size = bytes as f64;
     let mut unit_index = 0;
 

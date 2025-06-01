@@ -87,11 +87,11 @@ pub struct CryptoConfig {
 #[derive(Args, Debug, Clone)]
 pub struct CompressionConfig {
     /// Enable compression (default: true)
-    #[arg(long, env = "BACKUP_COMPRESS", default_value = "true")]
+    #[arg(long = "compression-enabled", env = "BACKUP_COMPRESS", default_value = "true")]
     pub enabled: bool,
 
     /// Compression level (0-9, default: 6)
-    #[arg(long, env = "BACKUP_COMPRESSION_LEVEL", default_value = "6")]
+    #[arg(long = "compression-level", env = "BACKUP_COMPRESSION_LEVEL", default_value = "6")]
     pub level: u32,
 }
 

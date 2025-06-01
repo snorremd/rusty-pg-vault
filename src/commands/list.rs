@@ -1,12 +1,13 @@
 use anyhow::Result;
+use crate::utils;
 use crate::{cli::ListOpts, modules::s3::S3ClientTrait};
 use crate::modules::s3::S3Client;
+use crate::utils::formatting::format_bytes;
 use aws_sdk_s3::types::Object;
 use chrono::DateTime;
 use comfy_table::{Table, ContentArrangement, Cell, Color};
 use indicatif::{ProgressBar, ProgressStyle};
 use console::{style, Term};
-use crate::utils;
 
 pub async fn run(opts: &ListOpts) -> Result<()> {
     let term = Term::stdout();
@@ -103,7 +104,7 @@ fn add_backup_to_table(table: &mut Table, obj: &Object) {
 
     table.add_row(vec![
         Cell::new(key).fg(Color::White),
-        Cell::new(utils::format_bytes(size)).fg(Color::DarkGrey),
+        Cell::new(utils::formatting::format_bytes(size)).fg(Color::DarkGrey),
         Cell::new(last_modified).fg(Color::DarkGrey),
     ]);
 } 

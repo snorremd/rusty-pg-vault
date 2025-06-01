@@ -4,19 +4,17 @@ use aws_sdk_s3::types::{Object, CompletedMultipartUpload, CompletedPart};
 use aws_sdk_s3::config::{Builder, Credentials, Region, BehaviorVersion};
 use aws_sdk_s3::primitives::ByteStream;
 use async_trait::async_trait;
-use tokio::io::{AsyncRead, AsyncReadExt};
-use bytes::Bytes;
+use tokio::io::{AsyncReadExt};
 use std::boxed::Box;
 
-const PART_SIZE: usize = 1024 * 1024; // 1MB - minimum allowed by S3
-const READ_BUFFER_SIZE: usize = 8 * 1024; // 8KB
+const PART_SIZE: usize = 1024 * 1024 * 5; // 5MB - minimum allowed by certain S3 providers
 
 #[async_trait]
 pub trait S3ClientTrait {
     async fn list_objects(&self, prefix: Option<String>) -> Result<Vec<Object>>;
-    async fn upload_stream<R>(&self, key: &str, reader: R) -> Result<()>
+    async fn upload_to_s3_streaming<R>(&self, mut reader: R, key: &str) -> Result<()>
     where
-        R: AsyncRead + Send + Unpin + 'static;
+        R: tokio::io::AsyncRead + Unpin + Send + 'static;
 }
 
 #[derive(Clone)]
@@ -27,6 +25,8 @@ pub struct S3Client {
 
 #[async_trait]
 impl S3ClientTrait for S3Client {
+
+
     async fn list_objects(&self, prefix: Option<String>) -> Result<Vec<Object>> {
         let mut all_objects = Vec::new();
         let mut continuation_token = None;
@@ -57,92 +57,80 @@ impl S3ClientTrait for S3Client {
         Ok(all_objects)
     }
 
-    async fn upload_stream<R>(&self, key: &str, reader: R) -> Result<()>
+    async fn upload_to_s3_streaming<R>(&self, mut reader: R, key: &str) -> Result<()>
     where
-        R: AsyncRead + Send + Unpin + 'static,
+        R: tokio::io::AsyncRead + Unpin + Send + 'static,
     {
-        let mut reader = reader;
-
-        // Create multipart upload
+        // In order to do a multipart upload we need to define a multipart response, upload id, and keep track of the parts
         let create_resp = self.client
             .create_multipart_upload()
             .bucket(&self.bucket)
             .key(key)
             .send()
             .await?;
-        let upload_id = create_resp.upload_id().unwrap();
 
-        // Process chunks and upload parts
-        let mut buffer = Vec::with_capacity(PART_SIZE);
-        let mut parts = Vec::new();
+        let upload_id = create_resp.upload_id().unwrap();
+        let mut completed_parts: Vec<CompletedPart> = Vec::new();
+
         let mut part_number = 1;
-        let mut chunk = [0u8; READ_BUFFER_SIZE];
+
+        // We make a buffer with PART_SIZE bytes, and read from the reader into it
+        let mut buffer = vec![0u8; PART_SIZE];
+        let mut total_bytes = 0;
 
         loop {
-            let n = reader.read(&mut chunk).await?;
+            let n = reader.read(&mut buffer).await?;
             if n == 0 {
                 break;
             }
-            buffer.extend_from_slice(&chunk[..n]);
 
+            total_bytes += n;
+            let part_data = buffer[..n].to_vec();
 
-            // Upload part as soon as we have enough data
-            if buffer.len() >= PART_SIZE {
-                let part_data = buffer.split_off(PART_SIZE);
+            // Only upload if this is the last part or if we have enough data
+            if part_data.len() >= PART_SIZE || total_bytes == n {
                 let part_resp = self.client
                     .upload_part()
                     .bucket(&self.bucket)
                     .key(key)
-                    .upload_id(&*upload_id)
+                    .upload_id(upload_id)
                     .part_number(part_number)
-                    .body(buffer.into())
+                    .body(ByteStream::from(part_data))
                     .send()
                     .await?;
 
-                parts.push(
+                completed_parts.push(
                     CompletedPart::builder()
-                        .set_e_tag(part_resp.e_tag().map(|s| s.to_string()))
                         .part_number(part_number)
+                        .e_tag(part_resp.e_tag().unwrap().to_string())
                         .build(),
                 );
 
-                buffer = part_data;
                 part_number += 1;
             }
         }
 
-        // Upload final part if there's remaining data
-        if !buffer.is_empty() {
-            let part_resp = self.client
-                .upload_part()
-                .bucket(&self.bucket)
-                .key(key)
-                .upload_id(&*upload_id)
-                .part_number(part_number)
-                .body(buffer.into())
-                .send()
-                .await?;
-
-            parts.push(
-                CompletedPart::builder()
-                    .set_e_tag(part_resp.e_tag().map(|s| s.to_string()))
-                    .part_number(part_number)
-                    .build(),
-            );
+        // If we have no parts at all, return an error
+        if completed_parts.is_empty() {
+            return Err(anyhow::anyhow!("No data to upload"));
         }
 
-        // Complete multipart upload
+        let completed_upload = CompletedMultipartUpload::builder()
+            .set_parts(Some(completed_parts))
+            .build();
+
         self.client
             .complete_multipart_upload()
             .bucket(&self.bucket)
             .key(key)
-            .upload_id(&*upload_id)
-            .multipart_upload(CompletedMultipartUpload::builder().set_parts(Some(parts)).build())
+            .upload_id(upload_id)
+            .multipart_upload(completed_upload)
             .send()
             .await?;
 
         Ok(())
     }
+
 }
 
 impl S3Client {
