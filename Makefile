@@ -54,7 +54,8 @@ backup:
 		--aws-secret-access-key $(S3_SECRET_KEY) \
 		--aws-endpoint-url $(S3_ENDPOINT) \
 		--passphrase $(PASSPHRASE) \
-		--compression-enabled
+		--compression-enabled \
+		--compression-level 10
 
 list:
 	cargo run -- list \

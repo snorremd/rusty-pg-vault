@@ -1,4 +1,6 @@
 use clap::{Parser, Subcommand, Args, arg};
+use crate::modules::compression::CompressionLevel;
+use std::str::FromStr;
 
 /// Main CLI parser
 #[derive(Parser, Debug)]
@@ -90,10 +92,11 @@ pub struct CompressionConfig {
     #[arg(long = "compression-enabled", env = "BACKUP_COMPRESS", default_value = "true")]
     pub enabled: bool,
 
-    /// Compression level (0-9, default: 6)
-    #[arg(long = "compression-level", env = "BACKUP_COMPRESSION_LEVEL", default_value = "6")]
-    pub level: u32,
+    /// Compression level
+    #[arg(long = "compression-level", env = "BACKUP_COMPRESSION_LEVEL", default_value = "FASTEST", value_parser = CompressionLevel::from_str)]
+    pub level: CompressionLevel,
 }
+
 
 /// Backup options
 #[derive(Args, Debug)]
@@ -192,7 +195,7 @@ mod tests {
             },
             compression: CompressionConfig {
                 enabled: true,
-                level: 6,
+                level: CompressionLevel::Precise(6),
             },
         };
 

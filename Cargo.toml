@@ -32,3 +32,4 @@ rand = "0.8.5"
 
 [dev-dependencies]
 mockall = "0.12.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }

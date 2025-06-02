@@ -4,7 +4,7 @@ use aws_sdk_s3::types::{Object, CompletedMultipartUpload, CompletedPart};
 use aws_sdk_s3::config::{Builder, Credentials, Region, BehaviorVersion};
 use aws_sdk_s3::primitives::ByteStream;
 use async_trait::async_trait;
-use tokio::io::{AsyncReadExt};
+use tokio::io::{AsyncRead, AsyncReadExt, BufReader};
 use std::boxed::Box;
 
 const PART_SIZE: usize = 1024 * 1024 * 5; // 5MB - minimum allowed by certain S3 providers
@@ -14,7 +14,7 @@ pub trait S3ClientTrait {
     async fn list_objects(&self, prefix: Option<String>) -> Result<Vec<Object>>;
     async fn upload_to_s3_streaming<R>(&self, mut reader: R, key: &str) -> Result<()>
     where
-        R: tokio::io::AsyncRead + Unpin + Send + 'static;
+        R: AsyncRead + Unpin + Send + 'static;
 }
 
 #[derive(Clone)]
@@ -57,11 +57,10 @@ impl S3ClientTrait for S3Client {
         Ok(all_objects)
     }
 
-    async fn upload_to_s3_streaming<R>(&self, mut reader: R, key: &str) -> Result<()>
+    async fn upload_to_s3_streaming<R>(&self, reader: R, key: &str) -> Result<()>
     where
-        R: tokio::io::AsyncRead + Unpin + Send + 'static,
+        R: AsyncRead + Unpin + Send + 'static,
     {
-        // In order to do a multipart upload we need to define a multipart response, upload id, and keep track of the parts
         let create_resp = self.client
             .create_multipart_upload()
             .bucket(&self.bucket)
@@ -71,24 +70,22 @@ impl S3ClientTrait for S3Client {
 
         let upload_id = create_resp.upload_id().unwrap();
         let mut completed_parts: Vec<CompletedPart> = Vec::new();
-
         let mut part_number = 1;
 
-        // We make a buffer with PART_SIZE bytes, and read from the reader into it
-        let mut buffer = vec![0u8; PART_SIZE];
-        let mut total_bytes = 0;
+        let mut reader = BufReader::with_capacity(PART_SIZE, reader);
+        let mut buffer = Vec::with_capacity(PART_SIZE);
+        let mut temp = vec![0u8; 8192]; // smaller internal read buffer
 
         loop {
-            let n = reader.read(&mut buffer).await?;
+            let n = reader.read(&mut temp).await?;
             if n == 0 {
                 break;
             }
+            buffer.extend_from_slice(&temp[..n]);
 
-            total_bytes += n;
-            let part_data = buffer[..n].to_vec();
+            while buffer.len() >= PART_SIZE {
+                let part_data = buffer.drain(..PART_SIZE).collect::<Vec<u8>>();
 
-            // Only upload if this is the last part or if we have enough data
-            if part_data.len() >= PART_SIZE || total_bytes == n {
                 let part_resp = self.client
                     .upload_part()
                     .bucket(&self.bucket)
@@ -110,7 +107,26 @@ impl S3ClientTrait for S3Client {
             }
         }
 
-        // If we have no parts at all, return an error
+        // Final (possibly < 5MB) part
+        if !buffer.is_empty() {
+            let part_resp = self.client
+                .upload_part()
+                .bucket(&self.bucket)
+                .key(key)
+                .upload_id(upload_id)
+                .part_number(part_number)
+                .body(ByteStream::from(buffer.clone()))
+                .send()
+                .await?;
+
+            completed_parts.push(
+                CompletedPart::builder()
+                    .part_number(part_number)
+                    .e_tag(part_resp.e_tag().unwrap().to_string())
+                    .build(),
+            );
+        }
+
         if completed_parts.is_empty() {
             return Err(anyhow::anyhow!("No data to upload"));
         }

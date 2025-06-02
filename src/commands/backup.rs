@@ -1,13 +1,13 @@
 use std::sync::Arc;
 
-use age::Encryptor;
 use anyhow::Result;
-use async_compression::tokio::write::ZstdEncoder;
 use chrono::Utc;
-use tokio::io::{AsyncWriteExt, duplex};
+use tokio::io::{duplex};
 use indicatif::{ProgressBar, ProgressStyle, MultiProgress};
 use tokio_util::compat::{TokioAsyncWriteCompatExt, FuturesAsyncWriteCompatExt};
 use crate::cli::BackupOpts;
+use crate::modules::compression::{CompressionTrait, ZstdCompression};
+use crate::modules::encryption::{AgeEncryption, EncryptionTrait};
 use crate::modules::pg::{PostgresClient, PostgresTrait};
 use crate::modules::s3::{S3Client, S3ClientTrait};
 use crate::utils::counting_reader::CountingReader;
@@ -18,7 +18,7 @@ pub async fn run(opts: &BackupOpts) -> Result<()> {
     
 
     let timestamp = Utc::now().format("%Y-%m-%d_%H-%M-%S");
-    let object_key = format!("{}_{}.sql.gz.age", 
+    let object_key = format!("{}_{}.sql.zst.age", 
         opts.pg.dbname, 
         timestamp
     );
@@ -67,28 +67,24 @@ pub async fn run(opts: &BackupOpts) -> Result<()> {
     );
 
     // We wrap the pg_dump output in a counting reader to get progress bar updates
-    let mut pg_reader = CountingReader::new(pg_client.dump().await?, Some(pg_bar));
+    let pg_reader = CountingReader::new(pg_client.dump().await?, Some(pg_bar));
+
+    let compression_level = opts.compression.level.clone();
 
     // Spawn compression task, read from pg dump buffered reader and write it to the zstd writer
     // When it is done copying data we can shut down the encoder
     let compression_task: tokio::task::JoinHandle<std::result::Result<(), anyhow::Error>> = tokio::spawn(async move {
-        let mut encoder = ZstdEncoder::new(CountingWriter::new(zstd_writer, Some(comp_bar)));
-        tokio::io::copy(&mut pg_reader, &mut encoder).await?;
-        encoder.shutdown().await?;
-        Ok::<(), anyhow::Error>(())
+        let compression = ZstdCompression::new(compression_level);
+        let compression_writer = CountingWriter::new(zstd_writer, Some(comp_bar));
+        compression.compress_stream(pg_reader, compression_writer).await?;
+        Ok(())
     });
 
     // Spawn encryption task with symmetric encryption using passphrase from cli
     let passphrase = opts.crypto.passphrase.clone();
     let encryption_task = tokio::spawn(async move {
-        // We wrap the age writer (where we write the compressed data) in the age encryptor so we get an encrypted stream of data
-        let encryptor = Encryptor::with_user_passphrase(age::secrecy::SecretString::new(passphrase.into()))
-            .wrap_async_output(age_writer.compat_write())
-            .await?;
-
-        tokio::io::copy(&mut zstd_reader, &mut CountingWriter::new(encryptor.compat_write(), Some(enc_bar)))
-            .await?;
-        Ok::<(), anyhow::Error>(())
+        let encryption = AgeEncryption::new(passphrase);
+        encryption.encrypt_stream(zstd_reader, CountingWriter::new(age_writer, Some(enc_bar))).await;
     });
 
     let s3_config = Arc::new(opts.s3.clone());
@@ -105,7 +101,6 @@ pub async fn run(opts: &BackupOpts) -> Result<()> {
         );
 
         s3_client.upload_to_s3_streaming(CountingReader::new(age_reader, Some(s3_bar_clone)), &object_key).await?;
-
         Ok::<(), anyhow::Error>(())
     });
 
