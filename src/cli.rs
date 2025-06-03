@@ -1,5 +1,5 @@
 use clap::{Parser, Subcommand, Args, arg};
-use crate::modules::compression::CompressionLevel;
+use crate::modules::compression::{CompressionLevel};
 use std::str::FromStr;
 
 /// Main CLI parser
@@ -62,28 +62,13 @@ pub struct PostgresConfig {
     pub databases: Option<Vec<String>>,
 }
 
-impl PostgresConfig {
-    pub fn as_connection_string(&self) -> String {
-        format!(
-            "postgres://{}:{}@{}:{}/{}",
-            self.user, self.password, self.host, self.port, self.dbname
-        )
-    }
-
-    pub fn databases_to_backup(&self) -> Vec<String> {
-        match &self.databases {
-            Some(dbs) => dbs.clone(),
-            None => vec![self.dbname.clone()],
-        }
-    }
-}
-
 /// Common encryption input
 #[derive(Args, Debug, Clone)]
 pub struct CryptoConfig {
     #[arg(long, env = "BACKUP_PASSPHRASE")]
     pub passphrase: String,
 }
+
 
 /// Compression options
 #[derive(Args, Debug, Clone)]
@@ -99,7 +84,7 @@ pub struct CompressionConfig {
 
 
 /// Backup options
-#[derive(Args, Debug)]
+#[derive(Args, Debug, Clone)]
 pub struct BackupOpts {
     #[command(flatten)]
     pub pg: PostgresConfig,
@@ -146,22 +131,6 @@ pub struct ListOpts {
 mod tests {
     use super::*;
 
-    #[test]
-    fn test_postgres_config_to_url() {
-        let config = PostgresConfig {
-            user: "testuser".to_string(),
-            password: "testpass".to_string(),
-            host: "localhost".to_string(),
-            port: 5432,
-            dbname: "testdb".to_string(),
-            databases: None,
-        };
-
-        assert_eq!(
-            config.as_connection_string(),
-            "postgres://testuser:testpass@localhost:5432/testdb"
-        );
-    }
 
     #[test]
     fn test_crypto_config() {

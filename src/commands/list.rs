@@ -2,7 +2,6 @@ use anyhow::Result;
 use crate::utils;
 use crate::{cli::ListOpts, modules::s3::S3ClientTrait};
 use crate::modules::s3::S3Client;
-use crate::utils::formatting::format_bytes;
 use aws_sdk_s3::types::Object;
 use chrono::DateTime;
 use comfy_table::{Table, ContentArrangement, Cell, Color};
@@ -13,13 +12,7 @@ pub async fn run(opts: &ListOpts) -> Result<()> {
     let term = Term::stdout();
     term.clear_screen()?;
     
-    let s3_client = S3Client::new(
-        opts.s3.s3_region.clone(),
-        opts.s3.aws_access_key_id.clone(),
-        opts.s3.aws_secret_access_key.clone(),
-        opts.s3.aws_endpoint_url.clone(),
-        opts.s3.s3_bucket.clone(),
-    );
+    let s3_client = S3Client::new(opts.s3.clone());
 
     let prefix = if opts.s3.s3_prefix.is_empty() {
         None

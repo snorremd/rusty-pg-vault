@@ -55,15 +55,6 @@ impl<R> CountingReader<R> {
             count: 0,
         }
     }
-
-    /// Returns the total number of bytes read so far.
-    ///
-    /// # Returns
-    ///
-    /// The number of bytes that have been read from the underlying reader
-    pub fn bytes_read(&self) -> u64 {
-        self.count
-    }
 }
 
 #[cfg(test)]
@@ -82,7 +73,7 @@ mod tests {
         let n = reader.read(&mut buf).await.unwrap();
 
         assert_eq!(n, data.len());
-        assert_eq!(reader.bytes_read(), data.len() as u64);
+        assert_eq!(reader.count, data.len() as u64);
         assert_eq!(&buf, data);
     }
 
@@ -97,7 +88,7 @@ mod tests {
         let n = reader.read(&mut buf).await.unwrap();
 
         assert_eq!(n, data.len());
-        assert_eq!(reader.bytes_read(), data.len() as u64);
+        assert_eq!(reader.count, data.len() as u64);
         assert_eq!(progress.position(), data.len() as u64);
         assert_eq!(&buf, data);
     }
@@ -112,13 +103,13 @@ mod tests {
         let mut buf = vec![0; 5];
         let n = reader.read(&mut buf).await.unwrap();
         assert_eq!(n, 5);
-        assert_eq!(reader.bytes_read(), 5);
+        assert_eq!(reader.count, 5);
 
         // Read remaining bytes
         let mut buf = vec![0; data.len() - 5];
         let n = reader.read(&mut buf).await.unwrap();
         assert_eq!(n, data.len() - 5);
-        assert_eq!(reader.bytes_read(), data.len() as u64);
+        assert_eq!(reader.count, data.len() as u64);
     }
 }
 

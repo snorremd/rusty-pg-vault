@@ -1,10 +1,5 @@
 use std::sync::Arc;
 
-use anyhow::Result;
-use chrono::Utc;
-use tokio::io::{duplex};
-use indicatif::{ProgressBar, ProgressStyle, MultiProgress};
-use tokio_util::compat::{TokioAsyncWriteCompatExt, FuturesAsyncWriteCompatExt};
 use crate::cli::BackupOpts;
 use crate::modules::compression::{CompressionTrait, ZstdCompression};
 use crate::modules::encryption::{AgeEncryption, EncryptionTrait};
@@ -12,16 +7,14 @@ use crate::modules::pg::{PostgresClient, PostgresTrait};
 use crate::modules::s3::{S3Client, S3ClientTrait};
 use crate::utils::counting_reader::CountingReader;
 use crate::utils::counting_writer::CountingWriter;
+use anyhow::Result;
+use chrono::Utc;
+use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
+use tokio::io::duplex;
 
 pub async fn run(opts: &BackupOpts) -> Result<()> {
-
-    
-
     let timestamp = Utc::now().format("%Y-%m-%d_%H-%M-%S");
-    let object_key = format!("{}_{}.sql.zst.age", 
-        opts.pg.dbname, 
-        timestamp
-    );
+    let object_key = format!("{}_{}.sql.zst.age", opts.pg.dbname, timestamp);
 
     // Create a single MultiProgress instance
     let multi_progress = MultiProgress::new();
@@ -54,7 +47,7 @@ pub async fn run(opts: &BackupOpts) -> Result<()> {
     s3_bar.set_message("Uploading to S3...");
 
     // We need a few duplex pipes to pass data between tasks
-    let (zstd_writer, mut zstd_reader) = duplex(64 * 1024);
+    let (zstd_writer, zstd_reader) = duplex(64 * 1024);
     let (age_writer, age_reader) = duplex(64 * 1024);
 
     // Create a postgres client
@@ -69,47 +62,49 @@ pub async fn run(opts: &BackupOpts) -> Result<()> {
     // We wrap the pg_dump output in a counting reader to get progress bar updates
     let pg_reader = CountingReader::new(pg_client.dump().await?, Some(pg_bar));
 
-    let compression_level = opts.compression.level.clone();
-
     // Spawn compression task, read from pg dump buffered reader and write it to the zstd writer
     // When it is done copying data we can shut down the encoder
-    let compression_task: tokio::task::JoinHandle<std::result::Result<(), anyhow::Error>> = tokio::spawn(async move {
-        let compression = ZstdCompression::new(compression_level);
+    let compression_opts_clone = opts.compression.clone();
+    let compression_task = tokio::spawn(async move {
+        let compression = ZstdCompression::new(compression_opts_clone);
         let compression_writer = CountingWriter::new(zstd_writer, Some(comp_bar));
-        compression.compress_stream(pg_reader, compression_writer).await?;
-        Ok(())
+        compression
+            .compress_stream(pg_reader, compression_writer)
+            .await
     });
 
     // Spawn encryption task with symmetric encryption using passphrase from cli
-    let passphrase = opts.crypto.passphrase.clone();
+    let encryption_opts_clone = opts.crypto.clone();
     let encryption_task = tokio::spawn(async move {
-        let encryption = AgeEncryption::new(passphrase);
-        encryption.encrypt_stream(zstd_reader, CountingWriter::new(age_writer, Some(enc_bar))).await;
+        let encryption = AgeEncryption::new(encryption_opts_clone);
+        encryption
+            .encrypt_stream(zstd_reader, CountingWriter::new(age_writer, Some(enc_bar)))
+            .await
     });
 
-    let s3_config = Arc::new(opts.s3.clone());
     let object_key = object_key.clone();
     let s3_bar_clone = s3_bar.clone();
+    let s3_opts_clone = opts.s3.clone();
 
     let s3_upload_task = tokio::spawn(async move {
-        let s3_client = S3Client::new(
-            s3_config.s3_region.clone(),
-            s3_config.aws_access_key_id.clone(),
-            s3_config.aws_secret_access_key.clone(),
-            s3_config.aws_endpoint_url.clone(),
-            s3_config.s3_bucket.clone(),
-        );
+        let s3_client = S3Client::new(s3_opts_clone);
 
-        s3_client.upload_to_s3_streaming(CountingReader::new(age_reader, Some(s3_bar_clone)), &object_key).await?;
+        s3_client
+            .upload_to_s3_streaming(
+                CountingReader::new(age_reader, Some(s3_bar_clone)),
+                &object_key,
+            )
+            .await?;
         Ok::<(), anyhow::Error>(())
     });
 
     // Wait for all tasks to complete
-    let (comp_result, encrypt_result, s3_result) = tokio::join!(compression_task, encryption_task, s3_upload_task);
+    let (compression_result, encryption_result, s3_result) =
+        tokio::join!(compression_task, encryption_task, s3_upload_task);
 
     // Check results in order
-    comp_result??;
-    encrypt_result??;
+    compression_result??;
+    encryption_result??;
     s3_result??;
 
     Ok(())

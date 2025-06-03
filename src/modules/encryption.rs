@@ -4,6 +4,8 @@ use async_trait::async_trait;
 use tokio::io::{AsyncRead, AsyncWrite, AsyncWriteExt};
 use tokio_util::compat::{FuturesAsyncWriteCompatExt, TokioAsyncReadCompatExt, TokioAsyncWriteCompatExt};
 
+use crate::cli::CryptoConfig;
+
 #[async_trait]
 pub trait EncryptionTrait {
 
@@ -23,8 +25,8 @@ pub struct AgeEncryption {
 }
 
 impl AgeEncryption {
-    pub fn new(passphrase: String) -> Self {
-        Self { passphrase: secrecy::SecretString::new(passphrase.into()) }
+    pub fn new(config: CryptoConfig) -> Self {
+        Self { passphrase: secrecy::SecretString::new(config.passphrase.into()) }
     }
 }
 
@@ -81,8 +83,7 @@ mod tests {
     #[tokio::test]
     async fn test_encryption_and_decryption() {
         println!("AGE_SCRYPT_PARAMS={:?}", std::env::var("AGE_SCRYPT_PARAMS"));
-        let passphrase = "test-passphrase";
-        let encryption = AgeEncryption::new(passphrase.to_string());
+        let encryption = AgeEncryption::new(CryptoConfig { passphrase: "test-passphrase".to_string() });
         let original_data = b"Hello, this is a test message!";
 
         // Encrypt

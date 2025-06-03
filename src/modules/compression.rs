@@ -4,6 +4,8 @@ use tokio::io::{AsyncRead, AsyncWrite, AsyncWriteExt, BufReader};
 use anyhow::Result;
 use std::str::FromStr;
 
+use crate::cli::CompressionConfig;
+
 #[derive(Debug, Clone)]
 pub enum CompressionLevel {
     Fastest,
@@ -60,8 +62,9 @@ pub struct ZstdCompression {
 }
 
 impl ZstdCompression {
-    pub fn new(level: CompressionLevel) -> Self {
-        Self { level }
+    pub fn new(config: CompressionConfig) -> Self {
+        
+        Self { level: config.level.into() }  
     }
 }
 
@@ -80,7 +83,7 @@ impl CompressionTrait for ZstdCompression {
         Ok(())
     }
 
-    async fn decompress_stream<R,W>(&self, mut reader: R, mut writer: W) -> Result<()>
+    async fn decompress_stream<R,W>(&self, reader: R, mut writer: W) -> Result<()>
     where
         R: AsyncRead + Send + Unpin,
         W: AsyncWrite + Send + Unpin,
@@ -118,7 +121,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_compression_and_decompression() {
-        let compression = ZstdCompression::new(CompressionLevel::Default);
+        let compression = ZstdCompression::new(CompressionConfig { enabled: true, level: CompressionLevel::Default });
         
         // Test data
         let original_data = b"Hello, this is a test string that we will compress and then decompress!";
@@ -159,7 +162,7 @@ mod tests {
         ];
         
         for level in levels {
-            let compression = ZstdCompression::new(level);
+            let compression = ZstdCompression::new(CompressionConfig { enabled: true, level: level });
             let mut compressed_data = Vec::new();
             let mut decompressed_data = Vec::new();
             
@@ -194,7 +197,7 @@ mod tests {
         ];
         
         for level in levels {
-            let compression = ZstdCompression::new(level.clone());
+            let compression = ZstdCompression::new(CompressionConfig { enabled: true, level: level.clone() });
             let mut compressed_data = Vec::new();
             let mut decompressed_data = Vec::new();
             

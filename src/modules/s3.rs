@@ -6,6 +6,7 @@ use aws_sdk_s3::primitives::ByteStream;
 use async_trait::async_trait;
 use tokio::io::{AsyncRead, AsyncReadExt, BufReader};
 use std::boxed::Box;
+use crate::cli::S3Config;
 
 const PART_SIZE: usize = 1024 * 1024 * 5; // 5MB - minimum allowed by certain S3 providers
 
@@ -151,17 +152,13 @@ impl S3ClientTrait for S3Client {
 
 impl S3Client {
     pub fn new(
-        region: String,
-        access_key_id: String,
-        secret_access_key: String,
-        endpoint_url: String,
-        bucket: String,
+        s3_config: S3Config,
     ) -> Self {
-        let region = Region::new(region);
+        let region = Region::new(s3_config.s3_region);
         
         let credentials = Credentials::new(
-            &access_key_id,
-            &secret_access_key,
+            &s3_config.aws_access_key_id,
+            &s3_config.aws_secret_access_key,
             None,
             None,
             "rusty-pg-vault",
@@ -173,14 +170,14 @@ impl S3Client {
             .behavior_version(BehaviorVersion::latest());
 
         // Add endpoint if provided
-        if !endpoint_url.is_empty() {
-            config_builder = config_builder.endpoint_url(endpoint_url);
+        if !s3_config.aws_endpoint_url.is_empty() {
+            config_builder = config_builder.endpoint_url(s3_config.aws_endpoint_url);
         }
 
         let config = config_builder.build();
         let client = Client::from_conf(config);
 
-        Self { client, bucket }
+        Self { client, bucket: s3_config.s3_bucket.clone()}
     }
 }
 
