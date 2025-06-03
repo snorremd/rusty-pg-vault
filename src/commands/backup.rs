@@ -60,14 +60,15 @@ pub async fn run(opts: &BackupOpts) -> Result<()> {
     );
 
     // We wrap the pg_dump output in a counting reader to get progress bar updates
-    let pg_reader = CountingReader::new(pg_client.dump().await?, Some(pg_bar));
+    let pg_reader = CountingReader::new(pg_client.dump().await?, Some(pg_bar.clone()));
 
     // Spawn compression task, read from pg dump buffered reader and write it to the zstd writer
     // When it is done copying data we can shut down the encoder
     let compression_opts_clone = opts.compression.clone();
+    let comp_bar_clone = comp_bar.clone();
     let compression_task = tokio::spawn(async move {
         let compression = ZstdCompression::new(compression_opts_clone);
-        let compression_writer = CountingWriter::new(zstd_writer, Some(comp_bar));
+        let compression_writer = CountingWriter::new(zstd_writer, Some(comp_bar_clone));
         compression
             .compress_stream(pg_reader, compression_writer)
             .await
@@ -75,10 +76,11 @@ pub async fn run(opts: &BackupOpts) -> Result<()> {
 
     // Spawn encryption task with symmetric encryption using passphrase from cli
     let encryption_opts_clone = opts.crypto.clone();
+    let enc_bar_clone = enc_bar.clone();
     let encryption_task = tokio::spawn(async move {
         let encryption = AgeEncryption::new(encryption_opts_clone);
         encryption
-            .encrypt_stream(zstd_reader, CountingWriter::new(age_writer, Some(enc_bar)))
+            .encrypt_stream(zstd_reader, CountingWriter::new(age_writer, Some(enc_bar_clone)))
             .await
     });
 
@@ -106,6 +108,12 @@ pub async fn run(opts: &BackupOpts) -> Result<()> {
     compression_result??;
     encryption_result??;
     s3_result??;
+
+    // Keep progress bars visible after completion with final state
+    pg_bar.abandon();
+    comp_bar.abandon();
+    enc_bar.abandon();
+    s3_bar.abandon();
 
     Ok(())
 }
