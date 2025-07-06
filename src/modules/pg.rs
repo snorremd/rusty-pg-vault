@@ -1,12 +1,16 @@
 use anyhow::Result;
 use async_trait::async_trait;
 use std::process::Stdio;
-use tokio::io::{AsyncRead, AsyncReadExt, BufReader};
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt, BufReader, BufWriter};
 use tokio::process::{Command};
+use tokio::io::AsyncBufReadExt;
+
+use crate::cli::PostgresConfig;
 
 #[async_trait]
 pub trait PostgresTrait {
     async fn dump(&self) -> Result<Box<dyn AsyncRead + Send + Unpin>>;
+    async fn restore(&self, input: Box<dyn AsyncRead + Send + Unpin>) -> Result<()>;
 }
 
 // Command factory trait for testing
@@ -33,13 +37,13 @@ pub struct PostgresClient<F: CommandFactory = RealCommandFactory> {
 }
 
 impl PostgresClient {
-    pub fn new(host: String, port: u16, user: String, password: String, dbname: String) -> Self {
+    pub fn new(opts: PostgresConfig) -> Self {
         Self {
-            host,
-            port,
-            user,
-            password,
-            dbname,
+            host: opts.host,
+            port: opts.port,
+            user: opts.user,
+            password: opts.password,
+            dbname: opts.dbname,
             command_factory: RealCommandFactory,
         }
     }
@@ -81,12 +85,102 @@ impl<F: CommandFactory + Send + Sync> PostgresTrait for PostgresClient<F> {
         let stdout = BufReader::new(stdout);
         Ok(Box::new(stdout))
     }
+
+    async fn restore(&self, input: Box<dyn AsyncRead + Send + Unpin>) -> Result<()> {
+        let mut child = Command::new("pg_restore")
+            .arg("--no-owner")
+            .arg("--no-privileges")
+            .arg("--clean")
+            .arg("--if-exists")
+            .arg("--dbname")
+            .arg(&self.dbname)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()?;
+
+        let stdin = child.stdin.take().ok_or_else(|| anyhow::anyhow!("Failed to get stdin"))?;
+        let stderr = child.stderr.take().ok_or_else(|| anyhow::anyhow!("Failed to get stderr"))?;
+
+        // Create channels for stderr output
+        let (stderr_tx, mut stderr_rx) = tokio::sync::mpsc::channel(100);
+        let stderr_handle = tokio::spawn(async move {
+            let mut reader = BufReader::new(stderr);
+            let mut line = String::new();
+            while let Ok(n) = reader.read_line(&mut line).await {
+                if n == 0 {
+                    break;
+                }
+                if let Err(_) = stderr_tx.send(line.clone()).await {
+                    break;
+                }
+                line.clear();
+            }
+        });
+
+        // Create a buffered reader for the input
+        let mut input = BufReader::with_capacity(1024 * 1024, input); // 1MB buffer
+        let mut stdin = BufWriter::with_capacity(1024 * 1024, stdin); // 1MB buffer
+
+        // Spawn a task to handle stdin
+        let stdin_handle = tokio::spawn(async move {
+            let mut buf = vec![0u8; 64 * 1024]; // 64KB chunks
+            loop {
+                match input.read_buf(&mut buf).await {
+                    Ok(0) => break, // EOF
+                    Ok(n) => {
+                        if let Err(e) = stdin.write_all(&buf[..n]).await {
+                            eprintln!("Error writing to pg_restore stdin: {}", e);
+                            return Err(e);
+                        }
+                        if let Err(e) = stdin.flush().await {
+                            eprintln!("Error flushing pg_restore stdin: {}", e);
+                            return Err(e);
+                        }
+                    }
+                    Err(e) => {
+                        eprintln!("Error reading from input: {}", e);
+                        return Err(e);
+                    }
+                }
+            }
+            if let Err(e) = stdin.shutdown().await {
+                eprintln!("Error shutting down stdin: {}", e);
+                return Err(e);
+            }
+            Ok(())
+        });
+
+        // Wait for stdin to complete
+        if let Err(e) = stdin_handle.await? {
+            eprintln!("Error in stdin task: {}", e);
+            return Err(e.into());
+        }
+
+        // Wait for the process to complete
+        let status = child.wait().await?;
+        if !status.success() {
+            let mut error_output = String::new();
+            while let Some(line) = stderr_rx.recv().await {
+                error_output.push_str(&line);
+            }
+            return Err(anyhow::anyhow!("pg_restore failed: {}", error_output));
+        }
+
+        // Wait for stderr task to complete
+        if let Err(e) = stderr_handle.await {
+            eprintln!("Error in stderr task: {}", e);
+        }
+
+        Ok(())
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use tokio::io::AsyncReadExt;
+    use std::io::Cursor;
 
     impl<F: CommandFactory> PostgresClient<F> {
         pub fn with_command_factory(
@@ -163,5 +257,29 @@ INSERT INTO users (name, email) VALUES
         } else {
             panic!("Failed to get pg_dump content");
         }
+    }
+
+    #[tokio::test]
+    async fn test_pg_restore() {
+        let mock_output = r#"
+-- Mock PostgreSQL restore output
+CREATE TABLE
+INSERT 0 1
+"#.as_bytes().to_vec();
+
+        let client = PostgresClient::with_command_factory(
+            "localhost".to_string(),
+            5432,
+            "test".to_string(),
+            "test".to_string(),
+            "test".to_string(),
+            MockCommandFactory { mock_output: mock_output.clone() },
+        );
+
+        // Create a mock input stream
+        let input = Box::new(Cursor::new(mock_output));
+
+        let result = client.restore(input).await;
+        assert!(result.is_ok());
     }
 }

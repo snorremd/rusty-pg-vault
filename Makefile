@@ -3,6 +3,7 @@ PG_HOST ?= 127.0.0.1
 PG_USER ?= postgres
 PG_PASSWORD ?= postgres
 PG_DATABASE ?= demo_1gb
+RESTORE_DATABASE ?= $(PG_DATABASE)_restored
 S3_BUCKET ?= pgbackup
 S3_ENDPOINT ?= http://127.0.0.1:9000
 S3_ACCESS_KEY ?= minioadmin
@@ -41,10 +42,10 @@ init-dbs:
 	@echo "Database initialization complete!"
 
 # Backup commands
-.PHONY: backup list restore
+.PHONY: backup backup-list backup-restore backup-and-restore restore-from databases
 
 backup:
-	cargo run -- backup \
+	cargo run -- backup create \
 		--pg-host $(PG_HOST) \
 		--pg-user $(PG_USER) \
 		--pg-password $(PG_PASSWORD) \
@@ -57,15 +58,15 @@ backup:
 		--compression-enabled \
 		--compression-level 10
 
-list:
-	cargo run -- list \
+backup-list:
+	cargo run -- backup list \
 		--s3-bucket $(S3_BUCKET) \
 		--aws-access-key-id $(S3_ACCESS_KEY) \
 		--aws-secret-access-key $(S3_SECRET_KEY) \
 		--aws-endpoint-url $(S3_ENDPOINT)
 
-restore:
-	cargo run -- restore \
+backup-restore:
+	cargo run -- backup restore \
 		--pg-host $(PG_HOST) \
 		--pg-user $(PG_USER) \
 		--pg-password $(PG_PASSWORD) \
@@ -75,6 +76,55 @@ restore:
 		--aws-secret-access-key $(S3_SECRET_KEY) \
 		--aws-endpoint-url $(S3_ENDPOINT) \
 		--passphrase $(PASSPHRASE)
+
+database-list:
+	cargo run -- database list \
+		--pg-host $(PG_HOST) \
+		--pg-user $(PG_USER) \
+		--pg-password $(PG_PASSWORD) \
+		--pg-database $(PG_DATABASE)
+
+backup-and-restore: backup
+	@echo "Getting most recent backup..."
+	@LATEST_BACKUP=$$(cargo run -- backup list \
+		--s3-bucket $(S3_BUCKET) \
+		--aws-access-key-id $(S3_ACCESS_KEY) \
+		--aws-secret-access-key $(S3_SECRET_KEY) \
+		--aws-endpoint-url $(S3_ENDPOINT) | grep "$(PG_DATABASE)" | grep -v "+-" | grep -v "| Filename" | head -n1 | sed 's/|//g' | awk '{print $$1}') && \
+	if [ -z "$$LATEST_BACKUP" ]; then \
+		echo "Error: No backup found for database $(PG_DATABASE)" >&2; \
+		exit 1; \
+	fi && \
+	echo "Restoring from backup: $$LATEST_BACKUP to database: $(RESTORE_DATABASE)" && \
+	cargo run -- backup restore \
+		--pg-host $(PG_HOST) \
+		--pg-user $(PG_USER) \
+		--pg-password $(PG_PASSWORD) \
+		--pg-database $(RESTORE_DATABASE) \
+		--s3-bucket $(S3_BUCKET) \
+		--aws-access-key-id $(S3_ACCESS_KEY) \
+		--aws-secret-access-key $(S3_SECRET_KEY) \
+		--aws-endpoint-url $(S3_ENDPOINT) \
+		--passphrase $(PASSPHRASE) \
+		--s3-key "$$LATEST_BACKUP"
+
+restore-from:
+	@if [ -z "$(BACKUP_FILE)" ]; then \
+		echo "Error: BACKUP_FILE is required. Usage: make restore-from BACKUP_FILE=filename.sql.zst.age" >&2; \
+		exit 1; \
+	fi && \
+	echo "Restoring from backup: $(BACKUP_FILE) to database: $(RESTORE_DATABASE)" && \
+	cargo run -- backup restore \
+		--pg-host $(PG_HOST) \
+		--pg-user $(PG_USER) \
+		--pg-password $(PG_PASSWORD) \
+		--pg-database $(RESTORE_DATABASE) \
+		--s3-bucket $(S3_BUCKET) \
+		--aws-access-key-id $(S3_ACCESS_KEY) \
+		--aws-secret-access-key $(S3_SECRET_KEY) \
+		--aws-endpoint-url $(S3_ENDPOINT) \
+		--passphrase $(PASSPHRASE) \
+		--s3-key "$(BACKUP_FILE)"
 
 # Test scenarios
 .PHONY: test-small test-medium test-large test-xlarge

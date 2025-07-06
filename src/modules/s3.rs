@@ -13,9 +13,10 @@ const PART_SIZE: usize = 1024 * 1024 * 5; // 5MB - minimum allowed by certain S3
 #[async_trait]
 pub trait S3ClientTrait {
     async fn list_objects(&self, prefix: Option<String>) -> Result<Vec<Object>>;
-    async fn upload_to_s3_streaming<R>(&self, mut reader: R, key: &str) -> Result<()>
+    async fn upload_to_s3_streaming<R>(&self, reader: R, key: &str) -> Result<()>
     where
         R: AsyncRead + Unpin + Send + 'static;
+    async fn download_from_s3_streaming(&self, key: &str) -> Result<Box<dyn AsyncRead + Send + Unpin>>;
 }
 
 #[derive(Clone)]
@@ -26,7 +27,6 @@ pub struct S3Client {
 
 #[async_trait]
 impl S3ClientTrait for S3Client {
-
 
     async fn list_objects(&self, prefix: Option<String>) -> Result<Vec<Object>> {
         let mut all_objects = Vec::new();
@@ -146,6 +146,54 @@ impl S3ClientTrait for S3Client {
             .await?;
 
         Ok(())
+    }
+
+    async fn download_from_s3_streaming(&self, key: &str) -> Result<Box<dyn AsyncRead + Send + Unpin>> {
+        eprintln!("Starting S3 download for key: {}", key);
+        
+        let response = self.client
+            .get_object()
+            .bucket(&self.bucket)
+            .key(key)
+            .send()
+            .await?;
+
+        let body = response.body;
+        let reader = body.into_async_read();
+        
+        // Wrap the reader in a buffered reader with debug logging
+        struct BufferedDebugReader<R> {
+            inner: tokio::io::BufReader<R>,
+            total_bytes: usize,
+        }
+        
+        impl<R: AsyncRead + Unpin> AsyncRead for BufferedDebugReader<R> {
+            fn poll_read(
+                mut self: std::pin::Pin<&mut Self>,
+                cx: &mut std::task::Context<'_>,
+                buf: &mut tokio::io::ReadBuf<'_>,
+            ) -> std::task::Poll<std::io::Result<()>> {
+                let before = buf.filled().len();
+                let result = std::pin::Pin::new(&mut self.inner).poll_read(cx, buf);
+                let after = buf.filled().len();
+                let bytes_read = after - before;
+                
+                if bytes_read > 0 {
+                    self.total_bytes += bytes_read;
+                    eprintln!("S3 download: read {} bytes, total: {}", bytes_read, self.total_bytes);
+                }
+                
+                result
+            }
+        }
+        
+        // Use a 1MB buffer for the reader
+        let buffered_reader = tokio::io::BufReader::with_capacity(1024 * 1024, reader);
+        
+        Ok(Box::new(BufferedDebugReader {
+            inner: buffered_reader,
+            total_bytes: 0,
+        }))
     }
 
 }

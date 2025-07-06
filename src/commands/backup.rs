@@ -51,13 +51,7 @@ pub async fn run(opts: &BackupOpts) -> Result<()> {
     let (age_writer, age_reader) = duplex(64 * 1024);
 
     // Create a postgres client
-    let pg_client = PostgresClient::new(
-        opts.pg.host.clone(),
-        opts.pg.port,
-        opts.pg.user.clone(),
-        opts.pg.password.clone(),
-        opts.pg.dbname.clone(),
-    );
+    let pg_client = PostgresClient::new(opts.pg.clone());
 
     // We wrap the pg_dump output in a counting reader to get progress bar updates
     let pg_reader = CountingReader::new(pg_client.dump().await?, Some(pg_bar.clone()));

@@ -12,9 +12,28 @@ pub struct Cli {
 
 #[derive(Subcommand, Debug)]
 pub enum Commands {
-    Backup(BackupOpts),
-    Restore(RestoreOpts),
+    /// Manage database backups
+    #[command(subcommand)]
+    Backup(BackupCommands),
+    /// Manage live databases
+    #[command(subcommand)]
+    Database(DatabaseCommands),
+}
+
+#[derive(Subcommand, Debug)]
+pub enum BackupCommands {
+    /// Create a new backup
+    Create(BackupOpts),
+    /// List existing backups
     List(ListOpts),
+    /// Restore from a backup
+    Restore(RestoreOpts),
+}
+
+#[derive(Subcommand, Debug)]
+pub enum DatabaseCommands {
+    /// List databases on the server
+    List(DatabasesOpts),
 }
 
 /// Common config for S3
@@ -113,6 +132,9 @@ pub struct RestoreOpts {
 
     #[command(flatten)]
     pub crypto: CryptoConfig,
+
+    #[command(flatten)]
+    pub compression: CompressionConfig,
 }
 
 /// List backups options
@@ -124,6 +146,21 @@ pub struct ListOpts {
     /// Filter backups by prefix (overrides s3-prefix)
     #[arg(long = "prefix")]
     pub prefix: Option<String>,
+
+    /// Output simple format for shell scripts (one filename per line)
+    #[arg(long = "simple")]
+    pub simple: bool,
+}
+
+/// List databases options
+#[derive(Args, Debug)]
+pub struct DatabasesOpts {
+    #[command(flatten)]
+    pub pg: PostgresConfig,
+
+    /// Output simple format for shell scripts (one database per line)
+    #[arg(long = "simple")]
+    pub simple: bool,
 }
 
 
@@ -196,11 +233,17 @@ mod tests {
             crypto: CryptoConfig {
                 passphrase: "secret".to_string(),
             },
+            compression: CompressionConfig {
+                enabled: true,
+                level: CompressionLevel::Precise(6),
+            },
         };
 
         assert_eq!(opts.s3_key, "backup.sql.gpg");
-        assert_eq!(opts.pg.dbname, "db");
-        assert_eq!(opts.s3.s3_region, "region");
+        assert_eq!(opts.pg.user, "user");
+        assert_eq!(opts.s3.s3_bucket, "bucket");
+        assert_eq!(opts.crypto.passphrase, "secret");
+        assert!(opts.compression.enabled);
     }
 
     #[test]
@@ -215,6 +258,7 @@ mod tests {
                 aws_endpoint_url: "endpoint_url".to_string(),
             },
             prefix: None,
+            simple: false,
         };
 
         assert_eq!(opts.s3.s3_bucket, "bucket");

@@ -7,6 +7,7 @@ use chrono::DateTime;
 use comfy_table::{Table, ContentArrangement, Cell, Color};
 use indicatif::{ProgressBar, ProgressStyle};
 use console::{style, Term};
+use std::io::{self, IsTerminal};
 
 pub async fn run(opts: &ListOpts) -> Result<()> {
     let term = Term::stdout();
@@ -36,45 +37,60 @@ pub async fn run(opts: &ListOpts) -> Result<()> {
     // Finish the spinner
     pb.finish_and_clear();
 
+    // Determine if we should use simple formatting
+    let use_simple = opts.simple || !io::stdout().is_terminal();
+
     // Add some spacing
     println!();
 
     if all_objects.is_empty() {
-        println!("{}", style(format!("Backups in bucket {}:", opts.s3.s3_bucket)).cyan().bold());
-        println!();
-        
-        let mut table = Table::new();
-        table
-            .set_content_arrangement(ContentArrangement::Dynamic)
-            .set_header(vec![
-                Cell::new("Filename").fg(Color::Cyan).add_attribute(comfy_table::Attribute::Bold),
-                Cell::new("Size").fg(Color::Cyan).add_attribute(comfy_table::Attribute::Bold),
-                Cell::new("Last Modified").fg(Color::Cyan).add_attribute(comfy_table::Attribute::Bold),
-            ])
-            .add_row(vec![
-                Cell::new("No backups found").fg(Color::Yellow),
-                Cell::new(""),
-                Cell::new(""),
-            ]);
-        println!("{}", table);
-    } else {
-        println!("{}", style(format!("Backups in bucket {} ({} objects):", opts.s3.s3_bucket, total_objects)).cyan().bold());
-        println!();
-        
-        let mut table = Table::new();
-        table
-            .set_content_arrangement(ContentArrangement::Dynamic)
-            .set_header(vec![
-                Cell::new("Filename").fg(Color::Cyan).add_attribute(comfy_table::Attribute::Bold),
-                Cell::new("Size").fg(Color::Cyan).add_attribute(comfy_table::Attribute::Bold),
-                Cell::new("Last Modified").fg(Color::Cyan).add_attribute(comfy_table::Attribute::Bold),
-            ]);
-
-        for obj in all_objects {
-            add_backup_to_table(&mut table, &obj);
+        if !use_simple {
+            println!("{}", style(format!("Backups in bucket {}:", opts.s3.s3_bucket)).cyan().bold());
+            println!();
+            
+            let mut table = Table::new();
+            table
+                .set_content_arrangement(ContentArrangement::Dynamic)
+                .set_header(vec![
+                    Cell::new("Filename").fg(Color::Cyan).add_attribute(comfy_table::Attribute::Bold),
+                    Cell::new("Size").fg(Color::Cyan).add_attribute(comfy_table::Attribute::Bold),
+                    Cell::new("Last Modified").fg(Color::Cyan).add_attribute(comfy_table::Attribute::Bold),
+                ])
+                .add_row(vec![
+                    Cell::new("No backups found").fg(Color::Yellow),
+                    Cell::new(""),
+                    Cell::new(""),
+                ]);
+            println!("{}", table);
         }
+    } else {
+        if use_simple {
+            // Simple output for shell scripts
+            println!("{}", style(format!("Backups in bucket {} ({} objects):", opts.s3.s3_bucket, total_objects)).cyan().bold());
+            println!();
+            for obj in &all_objects {
+                println!("{}", obj.key().unwrap_or("unknown"));
+            }
+        } else {
+            // Table output
+            println!("{}", style(format!("Backups in bucket {} ({} objects):", opts.s3.s3_bucket, total_objects)).cyan().bold());
+            println!();
+            
+            let mut table = Table::new();
+            table
+                .set_content_arrangement(ContentArrangement::Dynamic)
+                .set_header(vec![
+                    Cell::new("Filename").fg(Color::Cyan).add_attribute(comfy_table::Attribute::Bold),
+                    Cell::new("Size").fg(Color::Cyan).add_attribute(comfy_table::Attribute::Bold),
+                    Cell::new("Last Modified").fg(Color::Cyan).add_attribute(comfy_table::Attribute::Bold),
+                ]);
 
-        println!("{}", table);
+            for obj in &all_objects {
+                add_backup_to_table(&mut table, &obj);
+            }
+
+            println!("{}", table);
+        }
     }
 
     // Add some spacing at the end

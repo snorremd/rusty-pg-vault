@@ -60,16 +60,70 @@ impl EncryptionTrait for AgeEncryption {
         let decryptor = Decryptor::new_async(compat_reader).await?;
         let mut decrypted_reader = decryptor.decrypt_async(std::iter::once(&age::scrypt::Identity::new(self.passphrase.clone()) as _))?;
 
-        let mut buf = [0u8; 8192];
+        // Use a larger buffer and handle errors more gracefully
+        let mut buf = vec![0u8; 64 * 1024]; // 64KB buffer
+        let mut total_bytes = 0;
+        let mut consecutive_errors = 0;
+        const MAX_CONSECUTIVE_ERRORS: u32 = 3;
+        
         loop {
-            let n = futures::AsyncReadExt::read(&mut decrypted_reader, &mut buf).await?;
-            if n == 0 {
-                break;
+            match futures::AsyncReadExt::read(&mut decrypted_reader, &mut buf).await {
+                Ok(0) => {
+                    eprintln!("Decryption EOF reached after {} bytes", total_bytes);
+                    break;
+                }
+                Ok(n) => {
+                    total_bytes += n;
+                    eprintln!("Decrypted {} bytes, total: {}", n, total_bytes);
+                    consecutive_errors = 0; // Reset error counter on successful read
+                    
+                    // Write in smaller chunks to avoid overwhelming the pipe
+                    let mut written = 0;
+                    while written < n {
+                        let to_write = std::cmp::min(8192, n - written);
+                        match writer.write_all(&buf[written..written + to_write]).await {
+                            Ok(_) => {
+                                written += to_write;
+                                // Flush periodically to ensure data is sent
+                                if let Err(e) = writer.flush().await {
+                                    eprintln!("Error flushing decrypted data: {}", e);
+                                    return Err(e.into());
+                                }
+                            }
+                            Err(e) => {
+                                eprintln!("Error writing decrypted data: {}", e);
+                                return Err(e.into());
+                            }
+                        }
+                    }
+                }
+                Err(e) => {
+                    consecutive_errors += 1;
+                    eprintln!("Error during decryption (attempt {}/{}): {}", 
+                             consecutive_errors, MAX_CONSECUTIVE_ERRORS, e);
+                    
+                    if consecutive_errors >= MAX_CONSECUTIVE_ERRORS {
+                        return Err(anyhow::anyhow!("Too many consecutive decryption errors"));
+                    }
+                    
+                    // Add a small delay before retrying
+                    tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+                    continue;
+                }
             }
-            writer.write_all(&buf[..n]).await?;
         }
-        writer.flush().await?;
-        writer.shutdown().await?;
+        
+        // Final flush and shutdown
+        if let Err(e) = writer.flush().await {
+            eprintln!("Error in final flush: {}", e);
+            return Err(e.into());
+        }
+        if let Err(e) = writer.shutdown().await {
+            eprintln!("Error in shutdown: {}", e);
+            return Err(e.into());
+        }
+        
+        eprintln!("Decryption completed, total bytes: {}", total_bytes);
         Ok(())
     }
 }
@@ -77,7 +131,6 @@ impl EncryptionTrait for AgeEncryption {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use std::io::Cursor;
 
     #[tokio::test]
