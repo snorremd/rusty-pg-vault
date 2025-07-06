@@ -116,6 +116,10 @@ pub struct BackupOpts {
 
     #[command(flatten)]
     pub compression: CompressionConfig,
+
+    /// Output simple format for non-interactive terminals
+    #[arg(long = "simple")]
+    pub simple: bool,
 }
 
 /// Restore options
@@ -135,6 +139,10 @@ pub struct RestoreOpts {
 
     #[command(flatten)]
     pub compression: CompressionConfig,
+
+    /// Output simple format for non-interactive terminals
+    #[arg(long = "simple")]
+    pub simple: bool,
 }
 
 /// List backups options
@@ -203,6 +211,7 @@ mod tests {
                 enabled: true,
                 level: CompressionLevel::Precise(6),
             },
+            simple: false,
         };
 
         assert_eq!(opts.pg.user, "user");
@@ -237,6 +246,7 @@ mod tests {
                 enabled: true,
                 level: CompressionLevel::Precise(6),
             },
+            simple: false,
         };
 
         assert_eq!(opts.s3_key, "backup.sql.gpg");

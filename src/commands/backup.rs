@@ -1,4 +1,5 @@
 use std::sync::Arc;
+use std::io::{self, IsTerminal};
 
 use crate::cli::BackupOpts;
 use crate::modules::compression::{CompressionTrait, ZstdCompression};
@@ -7,6 +8,7 @@ use crate::modules::pg::{PostgresClient, PostgresTrait};
 use crate::modules::s3::{S3Client, S3ClientTrait};
 use crate::utils::counting_reader::CountingReader;
 use crate::utils::counting_writer::CountingWriter;
+use crate::utils::formatting::format_bytes;
 use anyhow::Result;
 use chrono::Utc;
 use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
@@ -16,35 +18,49 @@ pub async fn run(opts: &BackupOpts) -> Result<()> {
     let timestamp = Utc::now().format("%Y-%m-%d_%H-%M-%S");
     let object_key = format!("{}_{}.sql.zst.age", opts.pg.dbname, timestamp);
 
-    // Create a single MultiProgress instance
-    let multi_progress = MultiProgress::new();
-    let style = ProgressStyle::with_template("{spinner:.green} {msg} {bytes}")
-        .unwrap()
-        .progress_chars("⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏");
+    // Determine if we should use simple output
+    let use_simple = opts.simple || !io::stdout().is_terminal();
 
-    // Create progress bars for each stage
-    let pg_bar = Arc::new(multi_progress.add(ProgressBar::new(0)));
-    let comp_bar = Arc::new(multi_progress.add(ProgressBar::new(0)));
-    let enc_bar = Arc::new(multi_progress.add(ProgressBar::new(0)));
-    let s3_bar = Arc::new(multi_progress.add(ProgressBar::new(0)));
-
-    // Set styles and initial messages
-    for bar in [&pg_bar, &comp_bar, &enc_bar, &s3_bar] {
-        bar.set_style(style.clone());
+    if use_simple {
+        println!("Starting backup of database: {}", opts.pg.dbname);
+        println!("Backup file: {}", object_key);
     }
 
-    // Enable rate limiting for all progress bars
-    let refresh_rate = std::time::Duration::from_millis(100);
-    pg_bar.enable_steady_tick(refresh_rate);
-    comp_bar.enable_steady_tick(refresh_rate);
-    enc_bar.enable_steady_tick(refresh_rate);
-    s3_bar.enable_steady_tick(refresh_rate);
+    // Create progress bars only for interactive mode
+    let (_multi_progress, pg_bar, comp_bar, enc_bar, s3_bar) = if use_simple {
+        (None, Arc::new(ProgressBar::hidden()), Arc::new(ProgressBar::hidden()), Arc::new(ProgressBar::hidden()), Arc::new(ProgressBar::hidden()))
+    } else {
+        let multi_progress = MultiProgress::new();
+        let style = ProgressStyle::with_template("{spinner:.green} {msg} {bytes}")
+            .unwrap()
+            .progress_chars("⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏");
 
-    // Set initial messages
-    pg_bar.set_message("Dumping PostgreSQL...");
-    comp_bar.set_message("Compressing...");
-    enc_bar.set_message("Encrypting...");
-    s3_bar.set_message("Uploading to S3...");
+        // Create progress bars for each stage
+        let pg_bar = Arc::new(multi_progress.add(ProgressBar::new(0)));
+        let comp_bar = Arc::new(multi_progress.add(ProgressBar::new(0)));
+        let enc_bar = Arc::new(multi_progress.add(ProgressBar::new(0)));
+        let s3_bar = Arc::new(multi_progress.add(ProgressBar::new(0)));
+
+        // Set styles and initial messages
+        for bar in [&pg_bar, &comp_bar, &enc_bar, &s3_bar] {
+            bar.set_style(style.clone());
+        }
+
+        // Enable rate limiting for all progress bars
+        let refresh_rate = std::time::Duration::from_millis(100);
+        pg_bar.enable_steady_tick(refresh_rate);
+        comp_bar.enable_steady_tick(refresh_rate);
+        enc_bar.enable_steady_tick(refresh_rate);
+        s3_bar.enable_steady_tick(refresh_rate);
+
+        // Set initial messages
+        pg_bar.set_message("Dumping PostgreSQL...");
+        comp_bar.set_message("Compressing...");
+        enc_bar.set_message("Encrypting...");
+        s3_bar.set_message("Uploading to S3...");
+
+        (Some(multi_progress), pg_bar, comp_bar, enc_bar, s3_bar)
+    };
 
     // We need a few duplex pipes to pass data between tasks
     let (zstd_writer, zstd_reader) = duplex(64 * 1024);
@@ -78,7 +94,7 @@ pub async fn run(opts: &BackupOpts) -> Result<()> {
             .await
     });
 
-    let object_key = object_key.clone();
+    let object_key_clone = object_key.clone();
     let s3_bar_clone = s3_bar.clone();
     let s3_opts_clone = opts.s3.clone();
 
@@ -88,7 +104,7 @@ pub async fn run(opts: &BackupOpts) -> Result<()> {
         s3_client
             .upload_to_s3_streaming(
                 CountingReader::new(age_reader, Some(s3_bar_clone)),
-                &object_key,
+                &object_key_clone,
             )
             .await?;
         Ok::<(), anyhow::Error>(())
@@ -103,11 +119,21 @@ pub async fn run(opts: &BackupOpts) -> Result<()> {
     encryption_result??;
     s3_result??;
 
-    // Keep progress bars visible after completion with final state
-    pg_bar.abandon();
-    comp_bar.abandon();
-    enc_bar.abandon();
-    s3_bar.abandon();
+    if use_simple {
+        // Get final sizes from progress bars
+        let dump_size = pg_bar.position();
+        let upload_size = s3_bar.position();
+        
+        println!("Backup completed successfully: {}", object_key);
+        println!("Dump size: {}", format_bytes(dump_size));
+        println!("Upload size: {}", format_bytes(upload_size));
+    } else {
+        // Keep progress bars visible after completion with final state
+        pg_bar.abandon();
+        comp_bar.abandon();
+        enc_bar.abandon();
+        s3_bar.abandon();
+    }
 
     Ok(())
 }

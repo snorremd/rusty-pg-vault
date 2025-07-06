@@ -44,6 +44,8 @@ init-dbs:
 # Backup commands
 .PHONY: backup backup-list backup-restore backup-and-restore restore-from databases
 
+ARGS ?=
+
 backup:
 	cargo run -- backup create \
 		--pg-host $(PG_HOST) \
@@ -56,7 +58,8 @@ backup:
 		--aws-endpoint-url $(S3_ENDPOINT) \
 		--passphrase $(PASSPHRASE) \
 		--compression-enabled \
-		--compression-level 10
+		--compression-level 10 \
+		$(ARGS)
 
 backup-list:
 	cargo run -- backup list \

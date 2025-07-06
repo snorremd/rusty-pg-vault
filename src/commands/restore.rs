@@ -1,4 +1,5 @@
 use std::sync::Arc;
+use std::io::{self, IsTerminal};
 
 use anyhow::Result;
 use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
@@ -13,35 +14,49 @@ use crate::utils::counting_writer::CountingWriter;
 
 
 pub async fn run(opts: &RestoreOpts) -> Result<()> {
-    // Create a single MultiProgress instance
-    let multi_progress = MultiProgress::new();
-    let style = ProgressStyle::with_template("{spinner:.green} {msg} {bytes}")
-        .unwrap()
-        .progress_chars("⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏");
+    // Determine if we should use simple output
+    let use_simple = opts.simple || !io::stdout().is_terminal();
 
-    // Create progress bars for each stage
-    let pg_bar = Arc::new(multi_progress.add(ProgressBar::new(0)));
-    let comp_bar = Arc::new(multi_progress.add(ProgressBar::new(0)));
-    let enc_bar = Arc::new(multi_progress.add(ProgressBar::new(0)));
-    let s3_bar = Arc::new(multi_progress.add(ProgressBar::new(0)));
-
-    // Set styles and initial messages
-    for bar in [&pg_bar, &comp_bar, &enc_bar, &s3_bar] {
-        bar.set_style(style.clone());
+    if use_simple {
+        println!("Starting restore to database: {}", opts.pg.dbname);
+        println!("Backup file: {}", opts.s3_key);
     }
 
-    // Enable rate limiting for all progress bars
-    let refresh_rate = std::time::Duration::from_millis(100);
-    pg_bar.enable_steady_tick(refresh_rate);
-    comp_bar.enable_steady_tick(refresh_rate);
-    enc_bar.enable_steady_tick(refresh_rate);
-    s3_bar.enable_steady_tick(refresh_rate);
+    // Create progress bars only for interactive mode
+    let (_multi_progress, pg_bar, comp_bar, enc_bar, s3_bar) = if use_simple {
+        (None, Arc::new(ProgressBar::hidden()), Arc::new(ProgressBar::hidden()), Arc::new(ProgressBar::hidden()), Arc::new(ProgressBar::hidden()))
+    } else {
+        let multi_progress = MultiProgress::new();
+        let style = ProgressStyle::with_template("{spinner:.green} {msg} {bytes}")
+            .unwrap()
+            .progress_chars("⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏");
 
-    // Set initial messages
-    s3_bar.set_message("Downloading from S3...");
-    enc_bar.set_message("Decrypting...");
-    comp_bar.set_message("Decompressing...");
-    pg_bar.set_message("Restoring PostgreSQL...");
+        // Create progress bars for each stage
+        let pg_bar = Arc::new(multi_progress.add(ProgressBar::new(0)));
+        let comp_bar = Arc::new(multi_progress.add(ProgressBar::new(0)));
+        let enc_bar = Arc::new(multi_progress.add(ProgressBar::new(0)));
+        let s3_bar = Arc::new(multi_progress.add(ProgressBar::new(0)));
+
+        // Set styles and initial messages
+        for bar in [&pg_bar, &comp_bar, &enc_bar, &s3_bar] {
+            bar.set_style(style.clone());
+        }
+
+        // Enable rate limiting for all progress bars
+        let refresh_rate = std::time::Duration::from_millis(100);
+        pg_bar.enable_steady_tick(refresh_rate);
+        comp_bar.enable_steady_tick(refresh_rate);
+        enc_bar.enable_steady_tick(refresh_rate);
+        s3_bar.enable_steady_tick(refresh_rate);
+
+        // Set initial messages
+        s3_bar.set_message("Downloading from S3...");
+        enc_bar.set_message("Decrypting...");
+        comp_bar.set_message("Decompressing...");
+        pg_bar.set_message("Restoring PostgreSQL...");
+
+        (Some(multi_progress), pg_bar, comp_bar, enc_bar, s3_bar)
+    };
 
     // We need duplex channels for the pipeline with larger buffers
     let (age_reader, age_writer) = duplex(1024 * 1024); // 1MB buffer
@@ -87,6 +102,10 @@ pub async fn run(opts: &RestoreOpts) -> Result<()> {
     dec_result??;
     decomp_result??;
     pg_result??;
+
+    if use_simple {
+        println!("Restore completed successfully to database: {}", opts.pg.dbname);
+    }
 
     Ok(())
 } 
