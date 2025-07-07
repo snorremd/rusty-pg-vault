@@ -149,7 +149,6 @@ impl S3ClientTrait for S3Client {
     }
 
     async fn download_from_s3_streaming(&self, key: &str) -> Result<Box<dyn AsyncRead + Send + Unpin>> {
-        eprintln!("Starting S3 download for key: {}", key);
         
         let response = self.client
             .get_object()
@@ -180,7 +179,6 @@ impl S3ClientTrait for S3Client {
                 
                 if bytes_read > 0 {
                     self.total_bytes += bytes_read;
-                    eprintln!("S3 download: read {} bytes, total: {}", bytes_read, self.total_bytes);
                 }
                 
                 result
@@ -190,10 +188,7 @@ impl S3ClientTrait for S3Client {
         // Use a 1MB buffer for the reader
         let buffered_reader = tokio::io::BufReader::with_capacity(1024 * 1024, reader);
         
-        Ok(Box::new(BufferedDebugReader {
-            inner: buffered_reader,
-            total_bytes: 0,
-        }))
+        Ok(Box::new(buffered_reader))
     }
 
 }

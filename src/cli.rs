@@ -45,7 +45,7 @@ pub struct S3Config {
     #[arg(long, env = "S3_REGION", default_value = "us-east-1")]
     pub s3_region: String,
 
-    #[arg(long, env = "S3_PREFIX", default_value = "")]
+    #[arg(long, env = "S3_PREFIX", default_value = "", help = "S3 prefix for filtering backups (format: <database_name>/<partial_date>, e.g., 'demo_1gb/2025-07')")]
     pub s3_prefix: String,
 
     #[arg(long, env = "AWS_ACCESS_KEY_ID")]
@@ -150,10 +150,6 @@ pub struct RestoreOpts {
 pub struct ListOpts {
     #[command(flatten)]
     pub s3: S3Config,
-
-    /// Filter backups by prefix (overrides s3-prefix)
-    #[arg(long = "prefix")]
-    pub prefix: Option<String>,
 
     /// Output simple format for shell scripts (one filename per line)
     #[arg(long = "simple")]
@@ -267,7 +263,6 @@ mod tests {
                 aws_secret_access_key: "secret_access_key".to_string(),
                 aws_endpoint_url: "endpoint_url".to_string(),
             },
-            prefix: None,
             simple: false,
         };
 

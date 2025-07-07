@@ -58,8 +58,7 @@ backup:
 		--aws-endpoint-url $(S3_ENDPOINT) \
 		--passphrase $(PASSPHRASE) \
 		--compression-enabled \
-		--compression-level 10 \
-		$(ARGS)
+		--compression-level 10
 
 backup-list:
 	cargo run -- backup list \

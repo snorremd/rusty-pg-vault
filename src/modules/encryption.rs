@@ -74,7 +74,6 @@ impl EncryptionTrait for AgeEncryption {
                 }
                 Ok(n) => {
                     total_bytes += n;
-                    eprintln!("Decrypted {} bytes, total: {}", n, total_bytes);
                     consecutive_errors = 0; // Reset error counter on successful read
                     
                     // Write in smaller chunks to avoid overwhelming the pipe

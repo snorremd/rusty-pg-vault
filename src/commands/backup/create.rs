@@ -16,7 +16,7 @@ use tokio::io::duplex;
 
 pub async fn run(opts: &BackupOpts) -> Result<()> {
     let timestamp = Utc::now().format("%Y-%m-%d_%H-%M-%S");
-    let object_key = format!("{}_{}.sql.zst.age", opts.pg.dbname, timestamp);
+    let object_key = format!("{}/{}.sql.zst.age", opts.pg.dbname, timestamp);
 
     // Determine if we should use simple output
     let use_simple = opts.simple || !io::stdout().is_terminal();
