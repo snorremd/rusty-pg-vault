@@ -1,1 +1,3 @@
 /target
+docker/minio_data
+docker/pgadmin_data
